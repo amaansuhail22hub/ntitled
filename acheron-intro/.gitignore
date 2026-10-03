@@ -1,0 +1,5 @@
+build/
+__pycache__/
+# 22 Mbps master is >100 MB (GitHub limit); rebuild with ./make.sh
+out/*_master.mp4
+out/*_preview.mp4
