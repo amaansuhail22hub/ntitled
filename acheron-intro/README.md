@@ -5,9 +5,9 @@
 sound design use no stock footage and no sample libraries.
 
 **Deliverables** (all 2160×3840, 24 fps, BT.709, -14 LUFS / -1 dBTP):
-- `out/ACHERON_AheadOfTime_4K.mp4`: H.264, about 14 Mbps (about 83 MB). This is the copy kept in git.
-- `out/ACHERON_AheadOfTime_4K_HEVC.mp4`: HEVC, about 4.5 Mbps (under 30 MB). A small 4K copy for phones and messaging.
-- `out/ACHERON_AheadOfTime_4K_master.mp4`: H.264, about 22 Mbps (about 135 MB). Upload this one to Instagram or Shopify. It's built by `./make.sh` and kept out of git because GitHub rejects files over 100 MB.
+- `out/ACHERON_AheadOfTime_4K.mp4`: H.264, about 13 Mbps (79 MB). This is the copy kept in git.
+- `out/ACHERON_AheadOfTime_4K_HEVC.mp4`: HEVC, about 4.7 Mbps (28 MB). A small 4K copy for phones and messaging.
+- `out/ACHERON_AheadOfTime_4K_master.mp4`: H.264, about 22 Mbps (136 MB). Upload this one to Instagram or Shopify. It's built by `./make.sh` and kept out of git because GitHub rejects files over 100 MB.
 
 **Stems:** `out/stems/vo.wav` (voice only) and `out/stems/music_fx_no_vo.wav` (everything except the voice)
 
