@@ -8,8 +8,8 @@ It comes in two cuts that share every frame of the 45 s intro:
 - **Reels cut (44.6 s):** built for Instagram's stay-or-scroll window. There's no card and the first 0.4 s of black is trimmed. One heartbeat is split across the ears (lub left, dub right) on frame one, with the light line flashing down the centre and a small headphones badge up top. The first words land at 0.6 s. Every voiceover line that isn't already on screen as typography gets a burned-in caption, typed on at the pace of the voice, at a height Instagram's interface doesn't cover.
 
 **Reels deliverables:**
-- `out/ACHERON_AheadOfTime_Reels_4K.mp4`: H.264, about 13 Mbps, kept in git. Upload this one to Instagram.
-- `out/ACHERON_AheadOfTime_Reels_4K_HEVC.mp4`: HEVC, under 30 MB, for phones and messaging.
+- `out/ACHERON_AheadOfTime_Reels_4K.mp4`: H.264, about 14 Mbps (81 MB), kept in git. Upload this one to Instagram.
+- `out/ACHERON_AheadOfTime_Reels_4K_HEVC.mp4`: HEVC (26 MB), for phones and messaging.
 - `out/ACHERON_AheadOfTime_Reels_4K_master.mp4`: H.264, about 22 Mbps. Built by `./make.sh` and kept out of git (over 100 MB).
 
 **Site deliverables** (all 2160×3840, 24 fps, BT.709, -14 LUFS / -1 dBTP):
