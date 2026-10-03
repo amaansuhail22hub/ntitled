@@ -8,7 +8,7 @@ The brand lockup comes from assets/acheron-logo.png (white on black, or a
 transparent PNG): mark on the left, ACHERON, then the AHEAD OF TIME row. It is
 split into those parts automatically. Without it, placeholders are drawn.
 """
-import argparse, math, os, subprocess, sys, time
+import argparse, json, math, os, subprocess, sys, time
 import numpy as np
 import cv2
 from PIL import Image, ImageDraw, ImageFont
@@ -21,13 +21,15 @@ FONTS = os.path.join(ROOT, "fonts")
 ASSETS = os.path.join(ROOT, "assets")
 
 U, W, H = 2.0, 2160, 3840          # set by setup()
+CUT = "site"                       # "site": headphones card + intro, "reels": hook-first cut
 FH, FW = 480, 270                  # low-res field grid (design / 4)
 C = {}                             # per-process caches
 
 
-def setup(scale):
-    global U, W, H
+def setup(scale, cut="site"):
+    global U, W, H, CUT
     U = float(scale)
+    CUT = cut
     W, H = int(round(TL.DESIGN_W * U)), int(round(TL.DESIGN_H * U))
     C.clear()
 
@@ -1352,14 +1354,123 @@ def headphones(F, tc):
               dissolve=(out_t0 + 0.08 - TL.PRE, out_d))
 
 
+
+# ============================================================== Reels cut — badge and captions
+def reels_badge(F, tf):
+    """Small headphones badge up top for the first second, arcs on the stereo heartbeat."""
+    # frame one: the heartbeat line flashes down the centre on lub and dub
+    beat = sum(decay(tf, tb, 0.22) * a for (tb, _), a in zip(TL.REELS_BEATS, (1.0, 0.65)))
+    if beat > 0.004:
+        vline(F, 540, 1920, 1.15 * min(beat, 1.2), 1.7, 0.2 * min(beat, 1.0))
+    out = 1 - ss(lin(tf, TL.REELS_BADGE_OUT, TL.REELS_BADGE_OUT + 0.4))
+    if out <= 0.003:
+        return
+    P, _ = _hp_paths()
+    lay = new_layer()
+    p = Pen(lay, 540, 960, 0.42, 0, 345 - 960)
+    fr = eio(lin(tf, -0.12, 0.3))
+    for pts, _t0, _t1, v, w in P:
+        p.poly(_partial(pts, fr), v, w * 2.0)
+    for tp, side in TL.REELS_BEATS:
+        cx = 422 if side < 0 else 658
+        a0, a1 = (145, 215) if side < 0 else (-35, 35)
+        for j, rad in enumerate((80, 106, 132)):
+            b = 0.85 * math.exp(-((tf - tp - 0.04 - j * 0.08) / 0.09) ** 2) * (1 - 0.18 * j)
+            if b > 0.01:
+                p.poly(ellipse_pts(cx, 973, rad, rad, a0, a1, 40), b, 4.0)
+    F.add_layer(lay, out, glow=0.5)
+    draw_text(F, text_sprite("USE HEADPHONES", "Inter-Medium.ttf", 22, 0.5), 540, 410, 0.72,
+              alpha=out * ss(lin(tf, 0.05, 0.4)), glow=0.1)
+
+
+def vo_timing():
+    if "vot" not in C:
+        path = os.path.join(ROOT, "build", "vo_timing.json")
+        if os.path.exists(path):
+            with open(path) as fh:
+                C["vot"] = json.load(fh)
+        else:
+            C["vot"] = [[c[0], 0.075 * len(c[1])] for c in TL.VO]
+    return C["vot"]
+
+
+def wrap_caption(text, size=50, track=0.12, max_w=940):
+    key = ("wrap", text)
+    if key in C:
+        return C[key]
+    f = ImageFont.truetype(os.path.join(FONTS, "Inter-SemiBold.ttf"), 100)
+
+    def width(s_):
+        return (sum(f.getlength(ch) for ch in s_) + track * 100 * (len(s_) - 1)) * size / 100
+
+    words = text.split()
+    if width(text) <= max_w:
+        rows = [text]
+    else:      # most balanced two-line split
+        best = min(range(1, len(words)), key=lambda k: max(width(" ".join(words[:k])), width(" ".join(words[k:]))))
+        rows = [" ".join(words[:best]), " ".join(words[best:])]
+    C[key] = rows
+    return rows
+
+
+def draw_halo(F, spr, cx, cy, strength):
+    """Soft dark bed behind a caption so it reads over water, light and fog."""
+    m = int(26 * U)
+    a = np.pad(spr["a"], m)
+    a = cv2.GaussianBlur(cv2.dilate(a, np.ones((int(5 * U) | 1,) * 2, np.uint8)), (0, 0), 11 * U)
+    x0 = int(round(cx * U - spr["cx"])) - m
+    y0 = int(round(cy * U - spr["cy"])) - m
+    h, w = a.shape
+    X0, Y0, X1, Y1 = max(0, x0), max(0, y0), min(W, x0 + w), min(H, y0 + h)
+    if X1 > X0 and Y1 > Y0:
+        k = np.clip(a[Y0 - y0:Y1 - y0, X0 - x0:X1 - x0] * 2.2, 0, 1) * strength
+        F.L[Y0:Y1, X0:X1] *= 1 - k
+        F.G[Y0:Y1, X0:X1] *= 1 - k
+
+
+def reels_captions(F, t):
+    """Burned-in captions, typed on at the pace of the voice."""
+    tim = vo_timing()
+    for i in TL.REELS_CAPTIONS:
+        st, dur = tim[i]
+        on = st + 0.04
+        nxt = TL.VO[i + 1][0] if i + 1 < len(TL.VO) else TL.CUT_TO_BLACK
+        end = min(on + dur + 0.55, nxt - 0.08)
+        if i == 12:                      # "You didn't." holds through the silence, gone on the bell
+            end = TL.BELL
+        if t < on - 0.05 or t > end + 0.25:
+            continue
+        out = 1 - ss(lin(t, end, end + 0.22))
+        rows = wrap_caption(TL.VO[i][1].upper())
+        total = sum(len(r) for r in rows)
+        k = 0
+        for ri, row in enumerate(rows):
+            spr = text_sprite(row, "Inter-SemiBold.ttf", 50, 0.12)
+            la = np.zeros(len(row), np.float32)
+            for ci in range(len(row)):
+                ts = on + 0.85 * dur * (k / total)
+                la[ci] = ss(lin(t, ts - 0.03, ts + 0.1))
+                k += 1
+            y = TL.REELS_CAPTION_Y + (ri - (len(rows) - 1) / 2) * 74
+            draw_halo(F, spr, 540, y, 0.62 * out * float(la.max()))
+            draw_text(F, spr, 540, y, 0.95, alpha=out, letter_alpha=la, glow=0.12)
+
+
 # ============================================================== frame assembly
 def render(fi):
-    t = fi / TL.FPS - TL.PRE                  # intro time; negative during the headphones card
+    tf = fi / TL.FPS                          # file time
+    if CUT == "reels":
+        t = tf + TL.REELS_OFFSET
+    else:
+        t = tf - TL.PRE                       # intro time; negative during the headphones card
     F = Frame(t)
     black = t >= TL.CUT_TO_BLACK
     if not black:
-        if t < 1.6:                           # the card's ash keeps rising into the intro
+        if CUT == "site" and t < 1.6:         # the card's ash keeps rising into the intro
             headphones(F, t + TL.PRE)
+        if CUT == "reels":
+            reels_badge(F, tf)
+            reels_captions(F, t)
         if 0 <= t < 7.9:                           # runs past 6.0 so its ash can finish rising
             scene1(F)
         if 6.0 <= t < 13.4:
@@ -1419,8 +1530,8 @@ def finish(F, fi, black=False):
 _worker_scale = None
 
 
-def _init(scale):
-    setup(scale)
+def _init(scale, cut):
+    setup(scale, cut)
 
 
 def _job(fi):
@@ -1431,12 +1542,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--scale", type=float, default=2.0, help="2.0 = 2160x3840 (4K), 1.0 = 1080x1920")
     ap.add_argument("--stills", type=str, default="", help="comma list of file-time seconds to dump as PNG")
-    ap.add_argument("--out", default=os.path.join(ROOT, "build", "video_4k.mov"))
+    ap.add_argument("--cut", choices=["site", "reels"], default="site")
+    ap.add_argument("--out", default=None)
     ap.add_argument("--start", type=float, default=0.0)
-    ap.add_argument("--end", type=float, default=TL.PRE + TL.DUR)
+    ap.add_argument("--end", type=float, default=None)
     ap.add_argument("--jobs", type=int, default=os.cpu_count())
     args = ap.parse_args()
-    setup(args.scale)
+    setup(args.scale, args.cut)
+    if args.end is None:
+        args.end = TL.DUR - TL.REELS_OFFSET if args.cut == "reels" else TL.PRE + TL.DUR
+    if args.out is None:
+        args.out = os.path.join(ROOT, "build", f"video_4k_{args.cut}.mov")
     os.makedirs(os.path.join(ROOT, "build"), exist_ok=True)
 
     if args.stills:
@@ -1459,7 +1575,7 @@ def main():
     enc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     from multiprocessing import Pool
     t0 = time.time()
-    with Pool(args.jobs, initializer=_init, initargs=(args.scale,)) as pool:
+    with Pool(args.jobs, initializer=_init, initargs=(args.scale, args.cut)) as pool:
         for i, buf in enumerate(pool.imap(_job, range(f0, f1), chunksize=2)):
             enc.stdin.write(buf)
             if i % 48 == 0:

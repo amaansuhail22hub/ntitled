@@ -14,6 +14,16 @@ PRE = 3.5
 PRE_PULSES = [(1.15, -1), (1.85, 1)]   # (time in card, pan) soft pulse left ear, then right
 PRE_OUT = 2.6                # card starts dissolving into ash
 
+# Reels cut: no card. The file starts REELS_OFFSET seconds into the intro, a
+# stereo heartbeat (left ear, then right) hits on frame one under a small
+# headphones badge, and the first words land at 0.6 s. Captions run on every
+# VO line that isn't already on screen as typography.
+REELS_OFFSET = 0.4
+REELS_BEATS = [(0.0, -1), (0.27, 1)]     # (file time, pan)
+REELS_BADGE_OUT = 1.05
+REELS_CAPTIONS = [0, 1, 2, 10, 11, 12, 16]
+REELS_CAPTION_Y = 1360                    # above the Reels caption/username overlay
+
 # Output canvas. 9:16 vertical UHD. Design coordinates are 1080x1920 and get
 # multiplied by the render scale, so 4K is scale 2.0.
 DESIGN_W, DESIGN_H = 1080, 1920

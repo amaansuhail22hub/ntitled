@@ -6,7 +6,9 @@ owned. Outputs go to build/:
     vo_lines/NN.wav      processed VO takes, one per line
     stems/vo.wav         VO only, on the timeline
     stems/fx.wav         drone, heartbeat, plates, bell, breath, sub (no VO)
-    audio_master.wav     final mix, loudness-normalised (-14 LUFS, -1 dBTP)
+    audio_master.wav     site cut (headphones card + intro), -14 LUFS / -1 dBTP
+    audio_master_reels.wav  Reels cut (stereo heartbeat open, no card)
+    vo_timing.json       start and spoken length of every VO line (for captions)
 
 To drop in a real human read: put one WAV per line in build/vo_human/NN.wav
 (NN = line index in timeline.VO, 00..20) and run again with --human.
@@ -435,6 +437,38 @@ def preroll():
     return out * np.clip((TL.PRE - 0.05 - t) / 0.2, 0, 1)[:, None]
 
 
+def reels_open():
+    """Reels opener: one heartbeat split across the ears, lub left, dub right."""
+    n = int(1.6 * SR)
+    out = np.zeros((n, 2))
+    for (tb, side), amp in zip(TL.REELS_BEATS, (1.0, 0.7)):
+        m = int(1.2 * SR)
+        tt = np.arange(m) / SR
+        f = 56 + 32 * np.exp(-tt / 0.04)
+        ph = 2 * np.pi * np.cumsum(f) / SR
+        x = np.sin(ph) * np.exp(-tt / 0.2) + 0.45 * np.sin(2 * ph) * np.exp(-tt / 0.1)
+        x += filt(rng.standard_normal(m), "low", 900, 2) * np.exp(-tt / 0.008) * 0.25
+        x = np.tanh(1.6 * x) * amp
+        a = (0.9 * side + 1) * np.pi / 4
+        i = int(tb * SR)
+        out[i:i + m] += np.stack([x * np.cos(a), x * np.sin(a)], 1)[: n - i]
+    ir = make_ir(rt_low=2.6, rt_mid=2.2, rt_high=1.0, predelay=0.03, seed=21)
+    wet = np.stack([signal.fftconvolve(out[:, c], ir[:, c])[:n] for c in range(2)], 1)
+    return out + filt(wet, "high", 120, 2) * db(-16)
+
+
+def loudnorm(src, out):
+    """Two-pass EBU R128 normalisation to -14 LUFS, -1 dBTP."""
+    p = subprocess.run(["ffmpeg", "-hide_banner", "-i", src, "-af", "loudnorm=I=-14:TP=-1.0:LRA=11:print_format=json",
+                        "-f", "null", "-"], capture_output=True, text=True)
+    js = json.loads(p.stderr[p.stderr.rfind("{"):])
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", src, "-af",
+                    "loudnorm=I=-14:TP=-1.0:LRA=11:measured_I={input_i}:measured_TP={input_tp}:measured_LRA={input_lra}:"
+                    "measured_thresh={input_thresh}:offset={target_offset}:linear=true".format(**js),
+                    "-ar", str(SR), "-c:a", "pcm_s24le", out], check=True)
+    print("measured", {k: js[k] for k in ("input_i", "input_tp", "input_lra")}, "->", out)
+
+
 def gate(n=N):
     """Silence window before the bell and the cut to black."""
     t = np.arange(n) / SR
@@ -456,6 +490,9 @@ def main():
     takes, report = fit_takes(takes)
     for r in report:
         print("VO %02d  @%5.2fs  len %.2fs  room %.2fs  -> %.2fs" % r)
+    # spoken length of each line, for the Reels captions
+    with open(os.path.join(BUILD, "vo_timing.json"), "w") as fh:
+        json.dump([[c[0], len(x) / SR] for c, x in zip(TL.VO, takes)], fh)
     vo = np.zeros((N, 2))
     for cue, x in zip(TL.VO, takes):
         place(vo, x, cue[0])
@@ -471,7 +508,16 @@ def main():
 
     g = gate()
     vo_bus *= g[:, None]; fx *= g[:, None]
-    # the headphones card goes in front of everything
+    # Reels cut: trim the lead-in, stereo heartbeat on frame one
+    k0 = int(TL.REELS_OFFSET * SR)
+    reels = vo_bus[k0:] * db(1.5) + fx[k0:]
+    op = reels_open()
+    reels[: len(op)] += op * db(-7)
+    reels = reels / np.abs(reels).max() * db(-1)
+    pre_r = os.path.join(BUILD, "mix_premaster_reels.wav")
+    sf.write(pre_r, reels, SR, subtype="FLOAT")
+    loudnorm(pre_r, os.path.join(BUILD, "audio_master_reels.wav"))
+    # site cut: the headphones card goes in front of everything
     card = preroll()
     vo_bus = np.concatenate([np.zeros_like(card), vo_bus])
     fx = np.concatenate([card, fx])
@@ -483,17 +529,7 @@ def main():
     pre = os.path.join(BUILD, "mix_premaster.wav")
     sf.write(pre, mix, SR, subtype="FLOAT")
 
-    # two-pass loudness normalisation
-    p = subprocess.run(["ffmpeg", "-hide_banner", "-i", pre, "-af", "loudnorm=I=-14:TP=-1.0:LRA=11:print_format=json",
-                        "-f", "null", "-"], capture_output=True, text=True)
-    js = json.loads(p.stderr[p.stderr.rfind("{"):])
-    out = os.path.join(BUILD, "audio_master.wav")
-    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", pre, "-af",
-                    "loudnorm=I=-14:TP=-1.0:LRA=11:measured_I={input_i}:measured_TP={input_tp}:measured_LRA={input_lra}:"
-                    "measured_thresh={input_thresh}:offset={target_offset}:linear=true".format(**js),
-                    "-ar", str(SR), "-c:a", "pcm_s24le", out], check=True)
-    print("measured", {k: js[k] for k in ("input_i", "input_tp", "input_lra")})
-    print("wrote", out)
+    loudnorm(pre, os.path.join(BUILD, "audio_master.wav"))
 
 
 if __name__ == "__main__":
