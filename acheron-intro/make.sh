@@ -26,6 +26,15 @@ enc() {
 enc 18 22M 44M out/ACHERON_AheadOfTime_4K_master.mp4
 enc 19 14M 28M out/ACHERON_AheadOfTime_4K.mp4
 
+# Small 4K HEVC copy, two-pass, sized to stay under a 30 MB upload limit.
+X265="-c:v libx265 -preset medium -b:v 4500k -pix_fmt yuv420p -tag:v hvc1 -color_primaries bt709 -color_trc bt709 -colorspace bt709"
+P265="log-level=error:aq-mode=3:psy-rd=2.0:psy-rdoq=1.0:stats=build/x265.log"
+ffmpeg -hide_banner -loglevel error -y -i build/video_4k_intermediate.mov -vf "scale=out_color_matrix=bt709:out_range=tv" \
+  $X265 -x265-params "pass=1:$P265" -an -f mp4 /dev/null
+ffmpeg -hide_banner -loglevel error -y -i build/video_4k_intermediate.mov -i build/audio_master.wav -map 0:v -map 1:a \
+  -vf "scale=out_color_matrix=bt709:out_range=tv" $X265 -x265-params "pass=2:$P265" \
+  -c:a aac -b:a 192k -movflags +faststart -shortest out/ACHERON_AheadOfTime_4K_HEVC.mp4
+
 cp build/stems/vo.wav out/stems/vo.wav
 cp build/stems/fx.wav out/stems/music_fx_no_vo.wav
 ffprobe -hide_banner -v error -show_entries stream=codec_name,width,height,r_frame_rate,bit_rate -of compact out/ACHERON_AheadOfTime_4K.mp4

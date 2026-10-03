@@ -149,12 +149,12 @@ def db(x):
 
 
 # ----------------------------------------------------------------- voiceover
-def build_vo_takes(voice="am_michael:0.55,am_onyx:0.45", speed=0.86, pitch=0.972, human=False):
-    """Kokoro TTS (blended low voice) → half-semitone drop → close-mic chain.
+def build_vo_takes(voice="am_michael:0.7,am_onyx:0.3", speed=0.92, human=False):
+    """Kokoro TTS (blended low voice) → warm, dark close-mic chain.
 
-    A natively low blend beats pitch-shifting a lighter voice: shifting by 3
-    semitones measurably smeared consonants, the blend lands at ~102 Hz like
-    the reference clip with almost no DSP.
+    No pitch shifting, saturation or added noise: each of those pushed the
+    synthetic voice further toward sounding like a robot. Depth comes from the
+    voice blend itself, and the top end is rolled off where TTS artifacts live.
     """
     out_dir = os.path.join(BUILD, "vo_lines"); os.makedirs(out_dir, exist_ok=True)
     raw_dir = os.path.join(BUILD, "vo_raw"); os.makedirs(raw_dir, exist_ok=True)
@@ -176,7 +176,7 @@ def build_vo_takes(voice="am_michael:0.55,am_onyx:0.45", speed=0.86, pitch=0.972
     if ":" in voice:                      # "name:weight,name:weight" blend
         voice = sum(float(w) * k.get_voice_style(n) for n, w in (p.split(":") for p in voice.split(",")))
     # single words on the beat get a brisker read so they fit the 0.8-0.9 s grid
-    fast = {3: 1.0, 4: 1.0, 5: 0.95, 12: 0.95, 13: 0.95, 14: 0.95, 19: 0.95, 20: 0.95}
+    fast = {3: 1.0, 4: 1.0, 5: 0.97, 12: 0.97, 13: 0.97, 14: 0.97, 19: 0.97, 20: 0.97}
     for i, cue in enumerate(TL.VO):
         text = cue[1]
         sp = fast.get(i, speed)
@@ -186,10 +186,9 @@ def build_vo_takes(voice="am_michael:0.55,am_onyx:0.45", speed=0.86, pitch=0.972
             a, sr = k.create(text, voice=voice, speed=sp, lang="en-us")
         rp = os.path.join(raw_dir, f"{i:02d}.wav")
         sf.write(rp, a, sr)
-        pp = os.path.join(raw_dir, f"{i:02d}_pitched.wav")
+        pp = os.path.join(raw_dir, f"{i:02d}_48k.wav")
         subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", rp, "-af",
-                        f"aresample={SR}:resampler=soxr,rubberband=pitch={pitch}:formant=preserved:pitchq=quality:window=long:transients=smooth",
-                        "-ac", "1", pp], check=True)
+                        f"aresample={SR}:resampler=soxr", "-ac", "1", pp], check=True)
         b, _ = sf.read(pp)
         takes.append(vo_chain(b))
         sf.write(os.path.join(out_dir, f"{i:02d}.wav"), takes[-1], SR, subtype="PCM_24")
@@ -198,29 +197,27 @@ def build_vo_takes(voice="am_michael:0.55,am_onyx:0.45", speed=0.86, pitch=0.972
 
 def vo_chain(x, synthetic=True):
     x = x / (np.abs(x).max() + 1e-9) * 0.7
-    x = filt(x, "high", 65, 2)
+    x = filt(x, "high", 70, 2)
     x = eq(x,
-           biquad("lowshelf", 150, gain_db=4.5, q=0.7),     # proximity, chest
+           biquad("lowshelf", 170, gain_db=3.0, q=0.7),     # chest
            biquad("peak", 320, gain_db=-2.5, q=1.0),         # clear the mud
-           biquad("peak", 3200, gain_db=2.0, q=1.0),         # presence
-           biquad("highshelf", 9000, gain_db=3.0, q=0.7))    # air
+           biquad("peak", 2600, gain_db=-2.0, q=1.2),        # take the edge off
+           biquad("highshelf", 4200, gain_db=-7.0, q=0.7))   # treble down
     if synthetic:
-        # gravel: saturated top end, matched to the rasp in the reference clip
-        hi = filt(x, "high", 1200, 2)
-        grit = np.tanh(5 * hi) / np.tanh(5)
-        x = x + grit * db(-17)
-        # breath under the words
-        e = env_follow(x, 12)
-        n = filt(rng.standard_normal(len(x)), "band", [1800, 9000], 2)
-        x = x + n * e * db(-21)
-    x = compress(x, thresh_db=-26, ratio=3.2)
+        x = filt(x, "low", 8000, 4)                          # TTS fizz lives up here
+    x = compress(x, thresh_db=-24, ratio=2.5)
     x = x / (np.abs(x).max() + 1e-9) * db(-3)
     # trim lead silence so the first syllable lands on the cue
+    # (low threshold + 45 ms of lead so soft openers like the F in "Five" survive)
     e = env_follow(x, 5)
-    on = np.argmax(e > e.max() * 0.06)
-    x = x[max(0, on - int(0.015 * SR)):]
-    off = len(e) - np.argmax(e[::-1] > e.max() * 0.02)
-    return x[: max(1, off - on + int(0.12 * SR))]
+    on = np.argmax(e > e.max() * 0.012)
+    start = max(0, on - int(0.045 * SR))
+    x = x[start:]
+    off = len(e) - np.argmax(e[::-1] > e.max() * 0.01)
+    x = x[: max(1, off - start + int(0.08 * SR))]
+    fade = min(len(x), int(0.008 * SR))
+    x[:fade] *= np.linspace(0, 1, fade)
+    return x
 
 
 def fit_takes(takes):
@@ -231,7 +228,7 @@ def fit_takes(takes):
         nxt = starts[i + 1] if i + 1 < len(starts) else TL.CUT_TO_BLACK
         if i == 12:                       # "You didn't." must clear the silence
             nxt = TL.SILENCE[0] + 0.05
-        room = nxt - starts[i] - 0.06
+        room = nxt - starts[i] - 0.03
         dur = len(x) / SR
         if dur > room:
             factor = dur / room
@@ -402,6 +399,42 @@ def build_fx():
     return fx
 
 
+def preroll():
+    """Headphones card: a low pulse in the left ear, then the right, over a soft air sweep."""
+    n = int(TL.PRE * SR)
+    t = np.arange(n) / SR
+    out = np.zeros((n, 2))
+
+    def panned(x, pan):
+        a = (pan + 1) * np.pi / 4
+        return np.stack([x * np.cos(a), x * np.sin(a)], 1)
+
+    air = filt(pink(n, 1)[:, 0], "band", [350, 2600], 2)
+    air /= np.abs(air).max()
+    env = np.sin(np.pi * np.clip((t - 0.2) / 3.0, 0, 1)) ** 2
+    pan = np.clip((t - 0.5) / 2.0, 0, 1) * 1.6 - 0.8          # drifts left to right
+    a = (pan + 1) * np.pi / 4
+    out += np.stack([air * np.cos(a), air * np.sin(a)], 1) * env[:, None] * db(-30)
+    # quiet open fifth on the intro drone's root, so the hand-over feels like one piece
+    pad = np.sin(2 * np.pi * 73.42 * t) + 0.6 * np.sin(2 * np.pi * 110.0 * t) + 0.25 * np.sin(2 * np.pi * 146.83 * t)
+    pe = np.clip(t / 0.9, 0, 1) * np.clip((3.3 - t) / 0.8, 0, 1)
+    out += np.stack([pad, pad], 1) * pe[:, None] * db(-36)
+    for tp, side in TL.PRE_PULSES:
+        m = int(1.6 * SR)
+        tt = np.arange(m) / SR
+        f = 58 + 30 * np.exp(-tt / 0.05)
+        ph = 2 * np.pi * np.cumsum(f) / SR
+        x = np.sin(ph) * np.exp(-tt / 0.32) + 0.4 * np.sin(2 * ph) * np.exp(-tt / 0.18)
+        x += filt(rng.standard_normal(m), "band", [500, 3000], 2) * np.exp(-tt / 0.01) * 0.15
+        i = int(tp * SR)
+        j = min(n, i + m)
+        out[i:j] += panned(np.tanh(1.4 * x), 0.85 * side)[: j - i] * db(-12)
+    ir = make_ir(rt_low=2.6, rt_mid=2.2, rt_high=1.0, predelay=0.03, seed=17)
+    wet = np.stack([signal.fftconvolve(out[:, c], ir[:, c])[:n] for c in range(2)], 1)
+    out = out + filt(wet, "high", 150, 2) * db(-14)
+    return out * np.clip((TL.PRE - 0.05 - t) / 0.2, 0, 1)[:, None]
+
+
 def gate(n=N):
     """Silence window before the bell and the cut to black."""
     t = np.arange(n) / SR
@@ -415,7 +448,7 @@ def gate(n=N):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--human", action="store_true", help="use build/vo_human/NN.wav instead of TTS")
-    ap.add_argument("--voice", default="am_michael:0.55,am_onyx:0.45")
+    ap.add_argument("--voice", default="am_michael:0.7,am_onyx:0.3")
     args = ap.parse_args()
     os.makedirs(os.path.join(BUILD, "stems"), exist_ok=True)
 
@@ -427,7 +460,7 @@ def main():
     for cue, x in zip(TL.VO, takes):
         place(vo, x, cue[0])
     ir_vo = make_ir(rt_low=3.4, rt_mid=3.0, rt_high=1.4, predelay=0.04, seed=9)
-    vo_wet = reverb(vo.mean(1), ir_vo, wet_db=-13, hp=220, lp=6500)
+    vo_wet = reverb(vo.mean(1), ir_vo, wet_db=-15, hp=220, lp=4000)
     vo_bus = vo + vo_wet
 
     fx = build_fx()
@@ -438,6 +471,10 @@ def main():
 
     g = gate()
     vo_bus *= g[:, None]; fx *= g[:, None]
+    # the headphones card goes in front of everything
+    card = preroll()
+    vo_bus = np.concatenate([np.zeros_like(card), vo_bus])
+    fx = np.concatenate([card, fx])
     sf.write(os.path.join(BUILD, "stems", "vo.wav"), vo_bus * db(-1), SR, subtype="PCM_24")
     sf.write(os.path.join(BUILD, "stems", "fx.wav"), fx / max(1, np.abs(fx).max()) * db(-1), SR, subtype="PCM_24")
 

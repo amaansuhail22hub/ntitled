@@ -1,11 +1,18 @@
 """Single source of truth for every timecode in the ACHERON intro.
 
-All times are seconds from the first frame. The audio builder and the frame
-renderer both read from here, so moving a cue moves picture and sound together.
+Times are seconds from the start of the intro, which begins PRE seconds into
+the file, after the headphones card. The audio builder and the frame renderer
+both read from here, so moving a cue moves picture and sound together.
 """
 
 FPS = 24
-DUR = 45.0
+DUR = 45.0                   # the intro itself
+
+# "Use headphones" card that plays before the intro. Every other cue in this
+# file is measured from the start of the intro, i.e. PRE seconds into the file.
+PRE = 3.5
+PRE_PULSES = [(1.15, -1), (1.85, 1)]   # (time in card, pan) soft pulse left ear, then right
+PRE_OUT = 2.6                # card starts dissolving into ash
 
 # Output canvas. 9:16 vertical UHD. Design coordinates are 1080x1920 and get
 # multiplied by the render scale, so 4K is scale 2.0.

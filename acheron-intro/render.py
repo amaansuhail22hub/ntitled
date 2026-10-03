@@ -4,10 +4,9 @@
 Every frame is a pure function of time, drawn in a 1080x1920 design space and
 rasterised at any scale (2.0 = 2160x3840 UHD). Run `python3 render.py --help`.
 
-Real logo files, if present, replace the built-in placeholders:
-    assets/acheron-mark.png       dagger-cross mark, point down (PNG with alpha, or white on black)
-    assets/acheron-wordmark.png   ACHERON wordmark (letters are split on empty columns)
-    assets/acheron-tagline.png    AHEAD OF TIME lockup line
+The brand lockup comes from assets/acheron-logo.png (white on black, or a
+transparent PNG): mark on the left, ACHERON, then the AHEAD OF TIME row. It is
+split into those parts automatically. Without it, placeholders are drawn.
 """
 import argparse, math, os, subprocess, sys, time
 import numpy as np
@@ -276,6 +275,13 @@ def _finish_sprite(key, arr, cols, text):
     return out
 
 
+def _per_letter(spr, arr):
+    arr = np.asarray(arr, np.float32)
+    if "lab" in spr:
+        return arr[spr["lab"]]
+    return arr[spr["col"]][None, :]
+
+
 def blit(dst, spr, x0, y0, val, mode="over"):
     """Composite spr (premultiplied coverage * val) into dst at integer top-left."""
     h, w = spr.shape
@@ -296,7 +302,7 @@ def draw_text(F, spr, cx, cy, val, alpha=1.0, glow=0.25, letter_alpha=None, lett
     a = spr["a"]
     m = a * alpha
     if letter_alpha is not None:
-        m = m * np.asarray(letter_alpha, np.float32)[spr["col"]][None, :]
+        m = m * _per_letter(spr, letter_alpha)
     x0 = int(round(cx * U - spr["cx"]))
     y0 = int(round(cy * U - spr["cy"]))
     edge = None
@@ -314,7 +320,7 @@ def draw_text(F, spr, cx, cy, val, alpha=1.0, glow=0.25, letter_alpha=None, lett
     blit(F.L, m, x0, y0, val)
     g = m * glow
     if letter_glow is not None:
-        g = g + m * np.asarray(letter_glow, np.float32)[spr["col"]][None, :]
+        g = g + m * _per_letter(spr, letter_glow)
     if edge is not None:
         g = g + edge * 0.8
         blit(F.L, edge * 0.35, x0, y0, 1.0, mode="add")
@@ -368,7 +374,8 @@ def ash_params():
 
 
 def ash_density(t):
-    return float(np.interp(t, [0, 1, 6, 9, 13.4, 24, 28, 33, 36.8, 41, 44.6], [0.7, 1.0, 0.85, 0.5, 0.35, 0.45, 0.6, 0.75, 0.9, 0.7, 0.6]))
+    return float(np.interp(t, [-3.5, -0.8, 0.2, 1, 6, 9, 13.4, 24, 28, 33, 36.8, 41, 44.6],
+                           [0.3, 0.35, 0.7, 1.0, 0.85, 0.5, 0.35, 0.45, 0.6, 0.75, 0.9, 0.7, 0.6]))
 
 
 def draw_ash(F):
@@ -393,7 +400,8 @@ def draw_ash(F):
 
 # ============================================================== fog
 def fog_intensity(t):
-    return float(np.interp(t, [0, 2.0, 6, 9, 13.4, 24, 27, 33, 36, 41, 44.6], [0.15, 1.0, 0.9, 0.55, 0.45, 0.55, 0.75, 0.8, 0.9, 0.85, 0.85]))
+    return float(np.interp(t, [-3.5, -0.5, 0, 2.0, 6, 9, 13.4, 24, 27, 33, 36, 41, 44.6],
+                           [0.35, 0.22, 0.15, 1.0, 0.9, 0.55, 0.45, 0.55, 0.75, 0.8, 0.9, 0.85, 0.85]))
 
 
 def fog_field(F):
@@ -451,12 +459,14 @@ def mark_sprite():
     if "mark" in C:
         return C["mark"]
     hs = int(800 * U)
-    path = os.path.join(ASSETS, "acheron-mark.png")
-    if os.path.exists(path):
-        a, v = load_logo(path)
-        sc = hs / a.shape[0]
-        a = cv2.resize(a, None, fx=sc, fy=sc, interpolation=cv2.INTER_AREA)
-        v = cv2.resize(v, None, fx=sc, fy=sc, interpolation=cv2.INTER_AREA)
+    L_ = logo()
+    icon = os.path.join(ASSETS, "acheron-icon.png")
+    if os.path.exists(icon):
+        a = _vec_file(icon, hs)
+        v = a * 0.93
+    elif L_ is not None:
+        a = L_["vec"](L_["mark_ids"], L_["mark_box"], hs / L_["mark_box"][3])
+        v = a * 0.93
     else:
         ss_ = 2
         Hh = hs * ss_
@@ -473,23 +483,121 @@ def mark_sprite():
     return C["mark"]
 
 
-def load_logo(path):
-    im = Image.open(path)
-    if im.mode in ("RGBA", "LA"):
-        arr = np.asarray(im.convert("RGBA"), np.float32) / 255
-        a = arr[..., 3]
-        lum = arr[..., :3].mean(-1)
-    else:
-        lum = np.asarray(im.convert("L"), np.float32) / 255
-        if lum.mean() > 0.5:            # dark logo on light background
-            lum = 1 - lum
-        a = np.clip(lum * 1.05, 0, 1)
-        lum = np.ones_like(lum)
-    ys, xs = np.nonzero(a > 0.02)
-    a = a[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
-    lum = lum[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
-    lum = lum / max(lum[a > 0.5].max() if (a > 0.5).any() else 1, 1e-3) * 0.95
-    return np.ascontiguousarray(a), np.ascontiguousarray(a * lum)
+def _vec_file(path, height_px, k=8):
+    """Icon image (light on dark) -> tight, vector-sharp coverage mask of given height."""
+    g = np.asarray(Image.open(path).convert("L"), np.float32) / 255
+    bg = np.median(g)
+    ink = np.percentile(g[g > bg + 0.4], 90)
+    n_ = np.clip((g - bg) / (ink - bg), 0, 1)
+    num, lab, st, _ = cv2.connectedComponentsWithStats((n_ > 0.45).astype(np.uint8), 8)
+    keep = [i for i in range(1, num) if st[i][4] > 40]
+    sel = cv2.dilate(np.isin(lab, keep).astype(np.uint8), np.ones((5, 5), np.uint8))
+    ys, xs = np.nonzero(sel)
+    n_ = (n_ * sel)[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    up = cv2.GaussianBlur(cv2.resize(n_, None, fx=k, fy=k, interpolation=cv2.INTER_CUBIC), (0, 0), k * 0.22)
+    m = np.clip((up - 0.45) / 0.08 + 0.5, 0, 1)
+    h, w = n_.shape
+    return np.ascontiguousarray(cv2.resize(m, (round(w * height_px / h), height_px), interpolation=cv2.INTER_AREA).astype(np.float32))
+
+
+# ============================================================== the real lockup
+LOCK_W = 880              # design width of the full horizontal lockup
+LOCK_C = (540, 900)       # design centre of the lockup when it first resolves
+LOCK_RISE = 140           # how far it lifts in scene 6
+
+
+def logo():
+    """Split assets/acheron-logo.png into mark, letters and tagline row.
+
+    Each part is cut by connected components, then upscaled through a smooth
+    threshold so the low-res source edges come out vector-sharp at 4K.
+    """
+    if "logo" in C:
+        return C["logo"]
+    path = os.path.join(ASSETS, "acheron-logo.png")
+    if not os.path.exists(path):
+        C["logo"] = None
+        return None
+    arr = np.asarray(Image.open(path).convert("RGBA"), np.float32) / 255
+    g = arr[..., :3].mean(-1) * arr[..., 3]
+    if np.median(g) > 0.5:                  # dark logo on a light background
+        g = 1 - g
+    n, lab, st, _ = cv2.connectedComponentsWithStats((g > 0.35).astype(np.uint8), 8)
+    comps = [i for i in range(1, n) if st[i][4] > 12]
+    mark = max(comps, key=lambda i: st[i][3])
+    mx, my, mw, mh = st[mark][:4]
+    row2 = [i for i in comps if i != mark and st[i][1] > my + 0.72 * mh]
+    rest = [i for i in comps if i != mark and i not in row2]
+    med = np.median([st[i][4] for i in rest])
+    big = sorted([i for i in rest if st[i][4] > 0.2 * med], key=lambda i: st[i][0])
+    letters = [[i] for i in big]
+    for i in rest:                           # specks join the nearest letter
+        if i not in big:
+            cx_ = st[i][0] + st[i][2] / 2
+            k = int(np.argmin([abs(st[b][0] + st[b][2] / 2 - cx_) for b in big]))
+            letters[k].append(i)
+
+    def box(ids, pad=3):
+        x0 = min(st[i][0] for i in ids) - pad
+        y0 = min(st[i][1] for i in ids) - pad
+        x1 = max(st[i][0] + st[i][2] for i in ids) + pad
+        y1 = max(st[i][1] + st[i][3] for i in ids) + pad
+        return (x0, y0, x1 - x0, y1 - y0)
+
+    def vec(ids, b, scale, k=8):
+        x, y, w, h = b
+        sel = np.isin(lab[y:y + h, x:x + w], ids).astype(np.uint8)
+        sel = cv2.dilate(sel, np.ones((5, 5), np.uint8))
+        crop = g[y:y + h, x:x + w] * sel
+        up = cv2.resize(crop, None, fx=k, fy=k, interpolation=cv2.INTER_CUBIC)
+        up = cv2.GaussianBlur(up, (0, 0), k * 0.3)
+        m = np.clip((up - 0.42) / 0.08 + 0.5, 0, 1)
+        return np.ascontiguousarray(cv2.resize(m, (max(1, round(w * scale)), max(1, round(h * scale))),
+                                               interpolation=cv2.INTER_AREA).astype(np.float32))
+
+    allids = comps
+    lb = box(allids, 0)
+    S = LOCK_W / lb[2]
+    lcx, lcy = lb[0] + lb[2] / 2, lb[1] + lb[3] / 2
+
+    def off(b):
+        return ((b[0] + b[2] / 2 - lcx) * S, (b[1] + b[3] / 2 - lcy) * S)
+
+    word_ids = [i for grp in letters for i in grp]
+    out = dict(vec=vec, S=S, mark_ids=[mark], mark_box=box([mark]), word_ids=word_ids,
+               word_box=box(word_ids), letters=letters, tag_ids=row2, tag_box=box(row2) if row2 else None)
+    out["mark_off"], out["mark_h"] = off(out["mark_box"]), out["mark_box"][3] * S
+    out["word_off"] = off(out["word_box"])
+    out["tag_off"] = off(out["tag_box"]) if row2 else (0, 0)
+    C["logo"] = out
+    return out
+
+
+def layout():
+    """Where the mark, wordmark and tagline sit once the lockup resolves (design units)."""
+    L_ = logo()
+    if L_ is None:     # stacked placeholder lockup
+        return dict(mark=(540, 640, 560), word=(540, 1135), tag=(540, 1268), rise=170, invite=1300)
+    cx, cy = LOCK_C
+    m = (cx + L_["mark_off"][0], cy + L_["mark_off"][1], L_["mark_h"])
+    return dict(mark=m, word=(cx + L_["word_off"][0], cy + L_["word_off"][1]),
+                tag=(cx + L_["tag_off"][0], cy + L_["tag_off"][1]), rise=LOCK_RISE,
+                invite=cy + L_["tag_off"][1] - LOCK_RISE + 125)
+
+
+def _logo_sprite(key, ids_groups, b):
+    """Sprite dict compatible with draw_text, with a per-pixel letter index."""
+    L_ = logo()
+    sc = L_["S"] * U
+    a = L_["vec"]([i for gp in ids_groups for i in gp], b, sc)
+    lab = np.zeros(a.shape, np.int16)
+    if len(ids_groups) > 1:
+        stack = np.stack([L_["vec"](gp, b, sc) for gp in ids_groups])
+        lab = stack.argmax(0).astype(np.int16)
+    spr = dict(a=a, lab=lab, col=np.zeros(a.shape[1], np.int16), cx=a.shape[1] / 2, cy=a.shape[0] / 2,
+               n=len(ids_groups), text=key)
+    C[key] = spr
+    return spr
 
 
 def draw_mark(F, cx, cy, height, ang=0.0, val=1.0, glow=0.22, clip_below=None, reflect=None):
@@ -551,44 +659,17 @@ def draw_mark(F, cx, cy, height, ang=0.0, val=1.0, glow=0.22, clip_below=None, r
 def wordmark():
     if "wm" in C:
         return C["wm"]
-    path = os.path.join(ASSETS, "acheron-wordmark.png")
-    if os.path.exists(path):
-        a, v = load_logo(path)
-        target_w = 900 * U
-        sc = target_w / a.shape[1]
-        a = cv2.resize(a, None, fx=sc, fy=sc, interpolation=cv2.INTER_AREA)
-        ink = (a > 0.05).any(0)
-        # letters = runs of inked columns
-        cols, i = [], 0
-        while i < len(ink):
-            if ink[i]:
-                j = i
-                while j < len(ink) and ink[j]:
-                    j += 1
-                cols.append((i, j))
-                i = j
-            else:
-                i += 1
-        pad = np.zeros((a.shape[0] + 40, a.shape[1] + 40), np.float32)
-        pad[20:-20, 20:-20] = a
-        spr = _finish_sprite(("wm-file",), pad, [(x0 + 20, x1 + 20) for x0, x1 in cols], "X" * len(cols))
-    else:
-        spr = text_sprite("ACHERON", "Cinzel-SemiBold.ttf", 128, 0.22)
-    C["wm"] = spr
-    return spr
+    L_ = logo()
+    if L_ is not None:
+        return _logo_sprite("wm", L_["letters"], L_["word_box"])
+    C["wm"] = text_sprite("ACHERON", "Cinzel-SemiBold.ttf", 128, 0.22)
+    return C["wm"]
 
 
 def tagline():
-    path = os.path.join(ASSETS, "acheron-tagline.png")
-    if os.path.exists(path):
-        if "tag" not in C:
-            a, v = load_logo(path)
-            sc = 520 * U / a.shape[1]
-            a = cv2.resize(a, None, fx=sc, fy=sc, interpolation=cv2.INTER_AREA)
-            pad = np.zeros((a.shape[0] + 40, a.shape[1] + 40), np.float32)
-            pad[20:-20, 20:-20] = a
-            C["tag"] = _finish_sprite(("tag-file",), pad, [(20, 20 + a.shape[1])], "X")
-        return C["tag"]
+    L_ = logo()
+    if L_ is not None and L_["tag_ids"]:
+        return C["tag"] if "tag" in C else _logo_sprite("tag", [L_["tag_ids"]], L_["tag_box"])
     return text_sprite("AHEAD OF TIME", "Inter-Medium.ttf", 33, 0.62)
 
 
@@ -1042,12 +1123,14 @@ def dagger_state(t):
     cy += -2.5 * ss(lin(t, lock - 0.06, lock)) + 2.5 * ss(lin(t, lock, lock + 0.25))
     h = MARK_H
     cx = 540
-    # scene 5: settle into the lockup
+    # scene 5: settle into its place in the lockup
+    lay = layout()
+    lx, ly, lh = lay["mark"]
     m = eio(lin(t, 33.2, 34.6))
-    cy = cy + (640 - cy) * m
-    h = h + (560 - h) * m
-    rise6 = eio(lin(t, *TL.LOCKUP_RISE))
-    cy -= 170 * rise6
+    cx = cx + (lx - cx) * m
+    cy = cy + (ly - cy) * m
+    h = h + (lh - h) * m
+    cy -= lay["rise"] * eio(lin(t, *TL.LOCKUP_RISE))
     return cx, cy, h, ang
 
 
@@ -1113,7 +1196,9 @@ def scene4(F, wa):
 def scene5(F):
     t = F.t
     cx, cy, h, ang = dagger_state(t)
-    oy = -170 * eio(lin(t, *TL.LOCKUP_RISE))
+    lay = layout()
+    oy = -lay["rise"] * eio(lin(t, *TL.LOCKUP_RISE))
+    real = logo() is not None
     beat = 0.22 * (decay(t, TL.FINAL_BEAT, 0.25) + 0.6 * decay(t, TL.FINAL_BEAT + TL.DUB_OFFSET, 0.2))
     hit = decay(t, TL.SWELL_HIT, 0.5)
     if t >= 33.4:
@@ -1136,21 +1221,21 @@ def scene5(F):
     if la.max() > 0:
         base = 0.55 + 0.4 * ss(lin(t, TL.SWELL_HIT - 0.02, TL.SWELL_HIT + 0.12))
         val = base * (1 + beat)
-        wy = 1135 + oy
-        draw_text(F, wm, 540, wy, val, letter_alpha=la, letter_glow=lg + 1.1 * hit + beat * 2, glow=0.2)
+        wx, wy = lay["word"][0], lay["word"][1] + oy
+        draw_text(F, wm, wx, wy, val, letter_alpha=la, letter_glow=lg + 1.1 * hit + beat * 2, glow=0.2)
         # light across wet iron
         if TL.SWEEP[0] <= t <= TL.SWEEP[1] + 0.2:
-            sweep(F, wm, 540, wy, lin(t, *TL.SWEEP))
+            sweep(F, wm, wx, wy, lin(t, *TL.SWEEP))
     # AHEAD OF TIME
     if t >= TL.TAGLINE_IN:
         a = ss(lin(t, TL.TAGLINE_IN, TL.TAGLINE_IN + 0.9))
-        draw_text(F, tagline(), 540, 1268 + oy, 0.68 * (1 + beat), alpha=a, glow=0.12)
+        draw_text(F, tagline(), lay["tag"][0], lay["tag"][1] + oy, (0.86 if real else 0.68) * (1 + beat), alpha=a, glow=0.12)
     # the invitation
     for i, (ti, txt) in enumerate(TL.INVITE):
         if t >= ti - 0.05:
             a = ss(lin(t, ti - 0.05, ti + 0.55))
             lgx = 0.5 * math.sin(math.pi * lin(t, ti - 0.05, ti + 0.55))
-            draw_text(F, text_sprite(txt, "Inter-Medium.ttf", 36, 0.42), 540, 1300 + i * 76, 0.64,
+            draw_text(F, text_sprite(txt, "Inter-Medium.ttf", 36, 0.42), 540, lay["invite"] + i * 76, 0.64,
                       alpha=a, glow=0.12 + lgx)
 
 
@@ -1169,13 +1254,113 @@ def sweep(F, spr, cx, cy, pr):
     blit(F.G, hl * 1.1, x0, y0, 1.0, mode="add")
 
 
+
+# ============================================================== pre-roll — use headphones
+def _hp_paths():
+    """Line-art headphones as ordered polylines with their draw-on windows (card time)."""
+    if "hp" in C:
+        return C["hp"]
+    P = []
+    a = np.radians(np.linspace(180, 360, 90))
+    P.append((np.stack([540 + 118 * np.cos(a), 905 + 118 * np.sin(a)], 1), 0.25, 1.05, 0.86, 3.0))
+    a = np.radians(np.linspace(198, 342, 70))
+    P.append((np.stack([540 + 106 * np.cos(a), 905 + 106 * np.sin(a)], 1), 0.45, 1.15, 0.38, 1.4))
+    for cx, d in ((422, 1), (658, -1)):
+        P.append((np.array([(cx, 905), (cx, 918)]), 0.9, 1.0, 0.86, 3.0))
+        cup = rrect(cx - 24, 918, cx + 24, 1028, 22, n=10)
+        k = int(np.argmin(np.abs(cup[:, 0] - cx) + np.abs(cup[:, 1] - 918)))
+        cup = np.concatenate([cup[k:], cup[:k + 1]])
+        P.append((cup, 0.6, 1.25, 0.86, 3.0))
+        cx2 = cx + d * 30
+        P.append((rrect(cx2 - 6, 932, cx2 + 6, 1014, 6, n=6), 0.9, 1.35, 0.42, 1.4))
+    pts = np.concatenate([p[0] for p in P])
+    r = np.random.default_rng(13)
+    i = r.choice(len(pts), 900)
+    jitter = r.normal(0, 1.2, (900, 2))
+    ash = dict(x=pts[i, 0] + jitter[:, 0], y=pts[i, 1] + jitter[:, 1], v0=r.uniform(25, 80, 900),
+               acc=r.uniform(10, 50, 900), sw=r.uniform(4, 18, 900), ph=r.uniform(0, 6.28, 900),
+               fq=r.uniform(0.3, 1.0, 900), b=r.uniform(0.3, 1.0, 900), life=r.uniform(0.6, 1.3, 900))
+    C["hp"] = (P, ash)
+    return C["hp"]
+
+
+def _partial(pts, frac):
+    if frac >= 1:
+        return pts
+    seg = np.sqrt(((pts[1:] - pts[:-1]) ** 2).sum(1))
+    cum = np.concatenate([[0], np.cumsum(seg)])
+    L = cum[-1] * frac
+    k = int(np.searchsorted(cum, L))
+    if k <= 0:
+        return pts[:1]
+    f = (L - cum[k - 1]) / max(seg[k - 1], 1e-6)
+    return np.concatenate([pts[:k], [pts[k - 1] + (pts[k] - pts[k - 1]) * f]])
+
+
+def headphones(F, tc):
+    """3.5 s card: the headphones draw on, sound ripples left then right, then it turns to ash."""
+    P, ash = _hp_paths()
+    out_t0, out_d = TL.PRE_OUT, 0.6
+    lay = new_layer()
+    p = Pen(lay, 540, 960, 1.0 + 0.03 * min(tc, TL.PRE) / TL.PRE)
+    drawn = tc < out_t0 + out_d + 0.05
+    for pts, t0, t1, v, w in (P if drawn else []):
+        fr = eio(lin(tc, t0, t1))
+        if fr > 0:
+            p.poly(_partial(pts, fr), v, w)
+    # sound arcs, rippling outward from the ear that is playing
+    for tp, side in TL.PRE_PULSES:
+        cx = 422 if side < 0 else 658
+        a0, a1 = (145, 215) if side < 0 else (-35, 35)
+        for j, rad in enumerate((80, 106, 132)):
+            b = 0.8 * math.exp(-((tc - tp - 0.06 - j * 0.11) / 0.12) ** 2) * (1 - 0.18 * j)
+            if b > 0.01:
+                p.poly(ellipse_pts(cx, 973, rad, rad, a0, a1, 40), b, 2.0)
+    # dissolve left to right into ash
+    q = -0.1 + 1.2 * lin(tc, out_t0, out_t0 + out_d)
+    xs = np.arange(W, dtype=np.float32) / U
+    xn = (xs - 380) / 320
+    mask = ssv((xn - q) / 0.06 + 0.5) if q > -0.1 else None
+    if drawn:
+        F.add_layer(lay, 1.0, glow=0.55, colmask=mask)
+    if q > -0.1:
+        xn_p = (ash["x"] - 380) / 320
+        te = out_t0 + (xn_p + 0.1) / 1.2 * out_d
+        dt = tc - te
+        on = dt > 0
+        if on.any():
+            dt = dt[on]
+            b = ash["b"][on] * np.exp(-dt / ash["life"][on]) * np.clip(dt / 0.05, 0, 1) * ssv(1 - dt / 1.6) * 0.8
+            x = ash["x"][on] + ash["sw"][on] * np.sin(ash["fq"][on] * 6.28 * dt + ash["ph"][on]) + 10 * dt
+            y = ash["y"][on] - (ash["v0"][on] * dt + 0.5 * ash["acc"][on] * dt * dt)
+            X, Y = p.xy(x, y)
+            splat(F.ash, X / 2, Y / 2, b * 1.3)
+    # USE HEADPHONES
+    txt = "USE HEADPHONES"
+    spr = text_sprite(txt, "Inter-Medium.ttf", 28, 0.6)
+    la = np.zeros(len(txt), np.float32)
+    lg = np.zeros(len(txt), np.float32)
+    k = 0
+    for i, ch in enumerate(txt):
+        if ch == " ":
+            continue
+        ts = 0.95 + k * 0.055
+        pp = lin(tc, ts, ts + 0.45)
+        la[i], lg[i] = ss(pp), 0.45 * math.sin(math.pi * pp)
+        k += 1
+    draw_text(F, spr, 540, 1140, 0.74, letter_alpha=la, letter_glow=lg, glow=0.15,
+              dissolve=(out_t0 + 0.08 - TL.PRE, out_d))
+
+
 # ============================================================== frame assembly
 def render(fi):
-    t = fi / TL.FPS
+    t = fi / TL.FPS - TL.PRE                  # intro time; negative during the headphones card
     F = Frame(t)
     black = t >= TL.CUT_TO_BLACK
     if not black:
-        if t < 7.9:                           # runs past 6.0 so its ash can finish rising
+        if t < 1.6:                           # the card's ash keeps rising into the intro
+            headphones(F, t + TL.PRE)
+        if 0 <= t < 7.9:                           # runs past 6.0 so its ash can finish rising
             scene1(F)
         if 6.0 <= t < 13.4:
             scene2(F)
@@ -1245,10 +1430,10 @@ def _job(fi):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--scale", type=float, default=2.0, help="2.0 = 2160x3840 (4K), 1.0 = 1080x1920")
-    ap.add_argument("--stills", type=str, default="", help="comma list of seconds to dump as PNG")
+    ap.add_argument("--stills", type=str, default="", help="comma list of file-time seconds to dump as PNG")
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "video_4k.mov"))
     ap.add_argument("--start", type=float, default=0.0)
-    ap.add_argument("--end", type=float, default=TL.DUR)
+    ap.add_argument("--end", type=float, default=TL.PRE + TL.DUR)
     ap.add_argument("--jobs", type=int, default=os.cpu_count())
     args = ap.parse_args()
     setup(args.scale)
