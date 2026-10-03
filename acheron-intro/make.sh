@@ -9,17 +9,22 @@ mkdir -p build out/stems
 python3 audio.py "$@"
 python3 render.py --scale 2 --out build/video_4k_intermediate.mov
 
-# Delivery master: H.264 High 5.1, 2160x3840, 24 fps, BT.709, AAC 320k.
-ffmpeg -hide_banner -loglevel error -y \
-  -i build/video_4k_intermediate.mov -i build/audio_master.wav \
-  -map 0:v -map 1:a \
-  -c:v libx264 -preset slow -tune grain -crf 18 -maxrate 22M -bufsize 44M \
-  -profile:v high -level 5.1 -pix_fmt yuv420p \
-  -vf "scale=out_color_matrix=bt709:out_range=tv" \
-  -color_primaries bt709 -color_trc bt709 -colorspace bt709 \
-  -c:a aac -b:a 320k -ar 48000 \
-  -movflags +faststart -shortest \
-  out/ACHERON_AheadOfTime_4K.mp4
+# Two H.264 High 5.1 encodes, 2160x3840, 24 fps, BT.709, AAC 320k:
+#   _master  ~22 Mbps (~127 MB) for upload to Instagram / Shopify
+#   plain    ~14 Mbps (~77 MB), fits under GitHub's 100 MB file limit
+enc() {
+  ffmpeg -hide_banner -loglevel error -y \
+    -i build/video_4k_intermediate.mov -i build/audio_master.wav \
+    -map 0:v -map 1:a \
+    -c:v libx264 -preset slow -tune grain -crf "$1" -maxrate "$2" -bufsize "$3" \
+    -profile:v high -level 5.1 -pix_fmt yuv420p \
+    -vf "scale=out_color_matrix=bt709:out_range=tv" \
+    -color_primaries bt709 -color_trc bt709 -colorspace bt709 \
+    -c:a aac -b:a 320k -ar 48000 \
+    -movflags +faststart -shortest "$4"
+}
+enc 18 22M 44M out/ACHERON_AheadOfTime_4K_master.mp4
+enc 19 14M 28M out/ACHERON_AheadOfTime_4K.mp4
 
 cp build/stems/vo.wav out/stems/vo.wav
 cp build/stems/fx.wav out/stems/music_fx_no_vo.wav
